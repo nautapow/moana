@@ -1,0 +1,51 @@
+from nptdms import TdmsFile
+import numpy as np
+import matplotlib.pyplot as plt
+
+def isynci(arr):
+    """
+    return intervals of TTL sync pulses
+
+    Parameters
+    ----------
+    arr : list or 1d-array
+        sync pulses.
+
+    Returns
+    -------
+    1d-array
+        inter sync interval.
+
+    """
+    _pre = np.array(arr[:-1])
+    _post= np.array(arr[1:])
+    
+    return _post - _pre
+
+
+if __name__ == "__main__":
+    fdir = r'W:\projects\MOANA\labview\20240422\MO009_cre_001_2024_04_22_10_38_36.tdms'
+    tdms_file = TdmsFile.open(fdir)
+    groups = tdms_file['Untitled']
+    
+    stimstart = groups['StimStart'][:]
+    frame2p = groups['2Pframe1'][:]
+    frameMAG = groups['MagTrigger'][:]
+    sam_para = groups['Tone Parameters'][:]
+    
+    
+    sam_freq = sam_para[::2]
+    sam_loud = sam_para[1::2]
+    
+    time_stim = np.diff(np.sign(frame2p-2.5))>0
+    sync_2p = [i for i,a in enumerate(time_stim) if a]
+    
+    time_stim = np.diff(np.sign(frameMAG-2.5))>0
+    sync_mag = [i for i,a in enumerate(time_stim) if a]
+    
+    signal = np.load(r'W:\projects\MOANA\2p\20240422\20240422_MO009_cre\suite2p\plane0\F.npy', allow_pickle=True)
+    residual = np.load(r'W:\projects\MOANA\2p\20240422\20240422_MO009_cre\suite2p\plane0\Fneu.npy', allow_pickle=True)
+    signal = signal-residual
+    
+    sync_mag_isi2 = isynci(sync_mag)
+    sync_2p_isi = isynci(sync_2p)
