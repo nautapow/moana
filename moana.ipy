@@ -1,6 +1,8 @@
 from nptdms import TdmsFile
 import numpy as np
+from scipy import stats
 import matplotlib.pyplot as plt
+import pandas as pd
 
 def isynci(arr):
     """
@@ -24,28 +26,148 @@ def isynci(arr):
 
 
 if __name__ == "__main__":
-    fdir = r'W:\projects\MOANA\labview\20240422\MO009_cre_001_2024_04_22_10_38_36.tdms'
-    tdms_file = TdmsFile.open(fdir)
-    groups = tdms_file['Untitled']
+    note = pd.read_csv(r'X:\Users\MOANA\exp_note.csv')
+    index = note.index[(note['experiment']=='noNP') & (note['group']==1)]
     
-    stimstart = groups['StimStart'][:]
-    frame2p = groups['2Pframe1'][:]
-    frameMAG = groups['MagTrigger'][:]
-    sam_para = groups['Tone Parameters'][:]
-    
-    
-    sam_freq = sam_para[::2]
-    sam_loud = sam_para[1::2]
-    
-    time_stim = np.diff(np.sign(frame2p-2.5))>0
-    sync_2p = [i for i,a in enumerate(time_stim) if a]
-    
-    time_stim = np.diff(np.sign(frameMAG-2.5))>0
-    sync_mag = [i for i,a in enumerate(time_stim) if a]
-    
-    signal = np.load(r'W:\projects\MOANA\2p\20240422\20240422_MO009_cre\suite2p\plane0\F.npy', allow_pickle=True)
-    residual = np.load(r'W:\projects\MOANA\2p\20240422\20240422_MO009_cre\suite2p\plane0\Fneu.npy', allow_pickle=True)
-    signal = signal-residual
-    
-    sync_mag_isi2 = isynci(sync_mag)
-    sync_2p_isi = isynci(sync_2p)
+    #idx = index[-1]
+    #if idx == index[-1]:
+    for idx in index:
+        fdir = note.iloc[idx].labview + '\\' + note.iloc[idx].filename
+        filename = note.iloc[idx]['2p'].split('\\')[-1]
+        tdms_file = TdmsFile.open(fdir)
+        groups = tdms_file['Untitled']
+        
+        stimstart = groups['StimStart'][:]
+        frame2p = groups['2Pframe1'][:]
+        frameMAG = groups['MagTrigger'][:]
+        sam_para = groups['Tone Parameters'][:]
+        
+        sam_freq = sam_para[::2]
+        sam_loud = sam_para[1::2]
+        sam_para = tuple(zip(sam_freq, sam_loud))
+        
+        
+        time_stim = np.diff(np.sign(frame2p-2.5))>0
+        sync_2p = [i for i,a in enumerate(time_stim) if a]
+        
+        time_stim = np.diff(np.sign(frameMAG-2.5))>0
+        sync_mag = [i for i,a in enumerate(time_stim) if a]
+        #remove dummy sync
+        sync_mag.pop(0)
+        
+        time_stim = np.diff(np.sign(stimstart-1.5))>0
+        sync_sound = [i for i,a in enumerate(time_stim) if a]
+        
+        folder = note.iloc[idx]['2p']
+        signal = np.load(f'{folder}\suite2p\plane0\F.npy', allow_pickle=True)
+        residual = np.load(f'{folder}\suite2p\plane0\Fneu.npy', allow_pickle=True)
+        #signal = np.load(r'X:\Users\MOANA\2p\20240424\20240424_MO013_002\suite2p\plane0\F.npy', allow_pickle=True)
+        #residual = np.load(r'X:\Users\MOANA\2p\20240424\20240424_MO013_002\suite2p\plane0\Fneu.npy', allow_pickle=True)
+        signal = signal-residual
+        fs = note.iloc[idx].fps
+        
+        sync_mag_isi2 = isynci(sync_mag)
+        sync_2p_isi = isynci(sync_2p)
+        
+        mag_frames = []
+        for mag_on in sync_mag:
+            #mag_frames.append(np.argmin(np.abs(np.array(sync_2p) - mag_on)))
+            #always use the previous frame if the mag trigger is in between two frames
+            mag_frames.append(np.argmax((np.array(sync_2p) - mag_on) > 0)-1)
+            
+        baselines = []
+        for mag_frame in mag_frames:
+            baseline = np.mean(signal[:, mag_frame-10:mag_frame], axis=1)
+            baselines.append(baseline)
+        baselines = np.array(baselines)
+        rounds = len(baselines)
+        cells = len(signal)
+        
+        mag_effects = np.empty((cells, rounds, 100))
+        for i, mag_frame in enumerate(mag_frames):
+            mag_effects[:, i, :] = signal[:, mag_frame-10:mag_frame+90] - np.expand_dims(baselines[i], axis=1)
+        
+        avg_mageff = np.mean(mag_effects, axis=1)
+        mag_threshold = []
+        for cell in avg_mageff:
+            std = np.std(cell)
+            if any(cell[10:32] > 8*np.std(cell[:10])):
+                mag_threshold.append(cell)
+        
+        mag_threshold = np.array(mag_threshold)
+        x = np.arange(len(mag_threshold[0]))
+        y = np.mean(mag_threshold, axis=0)
+        err = stats.sem(mag_threshold, axis=0)
+        
+        fig, ax = plt.subplots()
+        ax.plot(x,y)
+        ax.fill_between(x, y+err, y-err, color='orange', alpha=0.6)
+        ax.axvspan(10, 32, alpha=0.1, color='red')
+        #[ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [10,32]]
+        ax.set_xticks(np.linspace(0,100,6))
+        ax.set_xticklabels(np.arange(-10,100,20))
+        ax.set_title(f'{filename}_mag', fontsize=14)
+        ax.set_xlabel('frame', fontsize=16)
+        ax.set_ylabel('response', fontsize=16)
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        plt.savefig(f'{filename}_mag.png', dpi=500, bbox_inches='tight')
+        plt.show()
+        plt.clf()
+        
+        sound_frames = []
+        for sound_on in sync_sound:
+            #sound_frames.append(np.argmin(np.abs(np.array(sync_2p) - sound_on)))
+            sound_frames.append(np.argmax((np.array(sync_2p) - sound_on) > 0)-1)
+            
+        baseline_sounds = []
+        for sound_frame in sound_frames:
+            baseline_sound = np.mean(signal[:, sound_frame-10:sound_frame], axis=1)
+            baseline_sounds.append(baseline_sound)
+        baseline_sounds = np.array(baseline_sounds)
+        rounds = len(baseline_sounds)
+        cells = len(signal)
+        
+        sound_effects = np.empty((cells, rounds, 50))
+        for i, sound_frame in enumerate(sound_frames):
+            try:
+                sound_effects[:, i, :] = signal[:, sound_frame-10:sound_frame+40] - np.expand_dims(baseline_sounds[i], axis=1)
+            except:
+                print(f'for {filename}, cannot broadcast start at {i}')
+                break
+            
+        sound_effects = np.swapaxes(sound_effects, 1, 0)
+        repeats = len(sound_effects)//21
+        duplicate = [[i for i,a in enumerate(sam_para[:int(21*repeats)]) if a == j] for j in sam_para[:21]]
+        
+        
+        avg_soundeff = []
+        for d in duplicate:
+            avg_soundeff.append(np.mean(sound_effects[d], axis=0))
+        avg_soundeff = np.swapaxes(avg_soundeff, 0, 1)
+        pull_soundeff = np.reshape(avg_soundeff, (-1,50))
+        
+        sound_threshold = []
+        for sound in pull_soundeff:
+            if any(sound[10:15] > 8*np.std(sound[:10])):
+                sound_threshold.append(sound)
+        
+        sound_threshold = np.array(sound_threshold)
+        x = np.arange(len(sound_threshold[0]))
+        y = np.mean(sound_threshold, axis=0)
+        err = stats.sem(sound_threshold, axis=0)
+        
+        fig, ax = plt.subplots()
+        ax.plot(x,y)
+        ax.fill_between(x, y+err, y-err, color='orange', alpha=0.6)
+        ax.axvspan(10, 16, alpha=0.1, color='red')
+        #[ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [10,32]]
+        ax.set_xticks(np.linspace(0,50,6))
+        ax.set_xticklabels(np.arange(-10,50,10))
+        ax.set_title(f'{filename}_sound', fontsize=14)
+        ax.set_xlabel('frame', fontsize=16)
+        ax.set_ylabel('response', fontsize=16)
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        plt.savefig(f'{filename}_sound.png', dpi=500, bbox_inches='tight')
+        plt.show()
+        plt.clf()
+        
