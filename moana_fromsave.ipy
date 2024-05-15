@@ -1,0 +1,79 @@
+import numpy as np
+from scipy import stats
+import matplotlib.pyplot as plt
+import pandas as pd
+
+
+note = pd.read_csv(r'X:\Users\MOANA\exp_note.csv')
+type_list = ['all', 'noNP', 'cre', '0mT']
+
+exp_type = type_list[3]
+index = note.index[(note['experiment']==exp_type) & (note['group']==1)]
+
+#idx = index[2]
+#if idx == index[2]:
+for idx in index:
+    fdir = note.iloc[idx].labview + '\\' + note.iloc[idx].filename
+    filename = note.iloc[idx]['2p'].split('\\')[-1]
+    
+    session = np.load(f'{filename}_{exp_type}.npy', allow_pickle=True)
+    
+    """
+    session = {'filename':filename, 'exp_type': exp_type, 'signal':signal, 'frame_mag':mag_frames, 
+               'frame_sound':sound_frames,'window_mag':windows_mag, 'window_sound':windows_uniqsound, 
+               'idx_uniqsound':uniq_sound, 'idx_p_mag':p_mag_idx, 'idx_p_sound':p_sound_idx}
+    """
+    
+    windows_mag = session.item()['window_mag']
+    idx_p_mag = session.item()['idx_p_mag']
+    windows_sound = session.item()['window_sound']
+    idx_p_sound = session.item()['idx_p_sound']
+    
+    
+# =============================================================================
+#     if idx_p_mag:
+#         sig_window_mag = np.mean(windows_mag[idx_p_mag, :, :], axis=1)
+#         x = np.arange(len(sig_window_mag[0]))
+#         y = np.mean(sig_window_mag, axis=0)
+#         err = stats.sem(sig_window_mag, axis=0)
+#         
+#         fig, ax = plt.subplots()
+#         ax.plot(x,y)
+#         ax.fill_between(x, y+err, y-err, color='orange', alpha=0.6)
+#         ax.axvspan(10, 32, alpha=0.1, color='red')
+#         #[ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [10,32]]
+#         ax.set_xticks(np.linspace(0,100,6))
+#         ax.set_xticklabels(np.arange(-10,100,20))
+#         ax.set_title(f'{filename}_{exp_type}_mag', fontsize=14)
+#         ax.set_xlabel('frame', fontsize=16)
+#         ax.set_ylabel('response', fontsize=16)
+#         ax.tick_params(axis='both', which='major', labelsize=14)
+#         plt.savefig(f'{filename}_{exp_type}_mag.png', dpi=500, bbox_inches='tight')
+#         plt.show()
+#         plt.clf()
+#     else:
+#         pass
+# =============================================================================
+    
+    if idx_p_sound:
+        sig_window_uniqsound = np.mean(windows_sound[idx_p_sound,:,:,:], axis=2)
+        sig_window_sound = np.mean(sig_window_uniqsound, axis=1)
+        x = np.arange(len(sig_window_sound[0]))
+        y = np.mean(sig_window_sound, axis=0)
+        err = stats.sem(sig_window_sound, axis=0)
+        
+        fig, ax = plt.subplots()
+        ax.plot(x,y)
+        ax.fill_between(x, y+err, y-err, color='orange', alpha=0.6)
+        ax.axvspan(10, 16, alpha=0.1, color='red')
+        #[ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [10,32]]
+        ax.set_xticks(np.linspace(0,50,6))
+        ax.set_xticklabels(np.arange(-10,50,10))
+        ax.set_title(f'{filename}_sound', fontsize=14)
+        ax.set_xlabel('frame', fontsize=16)
+        ax.set_ylabel('response', fontsize=16)
+        ax.tick_params(axis='both', which='major', labelsize=14)
+        plt.savefig(f'{filename}_sound.png', dpi=500, bbox_inches='tight')
+        plt.show()
+        plt.clf()
+    

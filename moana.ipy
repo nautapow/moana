@@ -3,6 +3,9 @@ import numpy as np
 from scipy import stats
 import matplotlib.pyplot as plt
 import pandas as pd
+import random
+import time
+import os
 
 def isynci(arr):
     """
@@ -27,10 +30,18 @@ def isynci(arr):
 
 if __name__ == "__main__":
     note = pd.read_csv(r'X:\Users\MOANA\exp_note.csv')
-    index = note.index[(note['experiment']=='noNP') & (note['group']==1)]
+    type_list = ['all', 'noNP', 'cre', '0mT']
+    exp_type = type_list[3]
     
-    #idx = index[-1]
-    #if idx == index[-1]:
+    index = note.index[(note['experiment']==exp_type) & (note['group']==1)]
+    
+    if os.path.isfile(r'X:\Users\MOANA\significant.csv'):
+        savedata = pd.read_csv(r'X:\Users\MOANA\significant.csv')
+    
+    filenames, exp_types, cell_numbers, cell_mags, cell_sounds, uniq_sounds= [],[],[],[],[],[]
+    
+    #idx = index[5]
+    #if idx == index[5]:
     for idx in index:
         fdir = note.iloc[idx].labview + '\\' + note.iloc[idx].filename
         filename = note.iloc[idx]['2p'].split('\\')[-1]
@@ -58,12 +69,21 @@ if __name__ == "__main__":
         time_stim = np.diff(np.sign(stimstart-1.5))>0
         sync_sound = [i for i,a in enumerate(time_stim) if a]
         
+        del frame2p
+        del frameMAG
+        del stimstart, time_stim
+        
         folder = note.iloc[idx]['2p']
         signal = np.load(f'{folder}\suite2p\plane0\F.npy', allow_pickle=True)
         residual = np.load(f'{folder}\suite2p\plane0\Fneu.npy', allow_pickle=True)
         #signal = np.load(r'X:\Users\MOANA\2p\20240424\20240424_MO013_002\suite2p\plane0\F.npy', allow_pickle=True)
         #residual = np.load(r'X:\Users\MOANA\2p\20240424\20240424_MO013_002\suite2p\plane0\Fneu.npy', allow_pickle=True)
         signal = signal-residual
+        
+        cell_nums = len(signal)
+        
+        del residual
+        
         fs = note.iloc[idx].fps
         
         sync_mag_isi2 = isynci(sync_mag)
@@ -74,7 +94,150 @@ if __name__ == "__main__":
             #mag_frames.append(np.argmin(np.abs(np.array(sync_2p) - mag_on)))
             #always use the previous frame if the mag trigger is in between two frames
             mag_frames.append(np.argmax((np.array(sync_2p) - mag_on) > 0)-1)
+            #shuffle
+            #mag_frames.append(np.argmax((np.array(sync_2p) - mag_on) > 0)-1+random.randrange(1,20,1))
             
+        sound_frames = []
+        for sound_on in sync_sound:
+            #sound_frames.append(np.argmin(np.abs(np.array(sync_2p) - sound_on)))
+            sound_frames.append(np.argmax((np.array(sync_2p) - sound_on) > 0)-1)
+            #shuffle
+            #sound_frames.append(np.argmax((np.array(sync_2p) - sound_on) > 0)-1+random.randrange(1,20,1))
+        
+        
+        cell_mag_effect=[]
+        cell_sound_effect=[]
+        cell_mag_base, cell_sound_base=[],[]
+        windows_mag, windows_sound = [],[]
+        for fcell in signal:
+            fnorm = (fcell - np.min(fcell, axis=0)) / (np.max(fcell, axis=0) - np.min(fcell, axis=0))
+            
+            frame_mag_base = []
+            frame_mag_eff = []    
+            window_mag = []
+            for mag_frame in mag_frames:
+                window = fnorm[mag_frame-10:mag_frame+40]
+                base = np.mean(window[4:11])
+                window = window - base
+                
+                sig_frame = np.argmax(window[15:30])+15
+                max_base_loc = np.argmax(window[3:11])+3
+                max_base = np.mean(window[max_base_loc-3:max_base_loc+4])
+                sig = np.mean(np.array([f for f in window[sig_frame-3:sig_frame+4]]))
+                frame_mag_base.append(max_base)
+                frame_mag_eff.append(sig)
+                big_window = fnorm[mag_frame-10:mag_frame+90]
+                big_window = big_window - base
+                window_mag.append(big_window)
+            
+            frame_sound_base = []
+            frame_sound_eff = []
+            window_sound = []
+            for sound_frame in sound_frames:
+                window = fnorm[sound_frame-10:sound_frame+20]
+                base = np.mean(window[8:11])
+                window = window - base
+                
+                sig_frame = np.argmax(window[10:])+10
+                max_base_loc = np.argmax(window[3:11])+3
+                max_base = np.mean(window[max_base_loc-1:max_base_loc+2])
+                sig = np.mean(np.array([f for f in window[sig_frame-1:sig_frame+2]]))
+                frame_sound_base.append(max_base)
+                frame_sound_eff.append(sig)
+                big_window = fnorm[sound_frame-10:sound_frame+40]
+                big_window = big_window - base
+                window_sound.append(big_window)
+            
+            cell_mag_base.append(frame_mag_base)
+            cell_sound_base.append(frame_sound_base)
+            cell_mag_effect.append(frame_mag_eff)
+            cell_sound_effect.append(frame_sound_eff)
+            windows_mag.append(window_mag)
+            windows_sound.append(window_sound)
+            
+
+        cell_mag_effect = np.array(cell_mag_effect)
+        cell_sound_effect = np.array(cell_sound_effect)
+        cell_mag_effect = cell_mag_effect - np.array(cell_mag_base)
+        windows_mag = np.array(windows_mag)
+        windows_sound = np.array(windows_sound)
+        windows_avgmag = np.mean(windows_mag, axis=1)
+        windows_avgsound = np.mean(windows_sound, axis=1)
+        
+        
+        repeats = len(cell_sound_effect[0])//21
+        uniq_sound = np.array([[i for i,a in enumerate(sam_para[:int(21*repeats)]) if a == j] for j in sam_para[:21]])
+        sam_para = sam_para[:21]
+        cell_sound_effect = cell_sound_effect[:,uniq_sound]
+        cell_sound_base = np.array(cell_sound_base)[:,uniq_sound]
+        cell_sound_effect = cell_sound_effect - cell_sound_base
+        windows_uniqsound = windows_sound[:, uniq_sound, :]
+        
+# =============================================================================
+#         """significance base on window_max"""
+#         p_mag = np.array([stats.wilcoxon(cell_mag, alternative='greater')[1] for cell_mag in cell_mag_effect])
+#         significant_mag = np.sum(p_mag < 0.05)
+#         
+#         p_sound = np.array([stats.wilcoxon(cell_sound, alternative='greater', 
+#                                            axis=1)[1] for cell_sound in cell_sound_effect])
+#         
+#         significant_uniqsound = np.sum(p_sound < 0.05/21, axis=1)
+#         significant_sound = np.sum(significant_uniqsound > 0)
+#         
+#         windows_uniqsound = windows_sound[:, uniq_sound, :]
+# =============================================================================
+        
+        """significance base on each frame"""
+        p_mags, p_sounds = [],[]
+        for i in range(10):
+            p_mag = np.array([stats.wilcoxon(frame_mag[:,13+i], alternative='greater')[1] for frame_mag in windows_mag])
+            p_mags.append(p_mag < 1-(0.95)**(1/10))
+            p_sound = np.array([stats.wilcoxon(frame_sound[:,:,13+i], alternative='greater', axis=1)[1] for frame_sound in windows_uniqsound])
+            p_sounds.append(p_sound < 1-(0.95)**(1/210))
+        
+        significant_mag = np.sum(np.array(p_mags), axis=0) > 0
+        significant_uniqsound = np.sum(np.swapaxes(np.array(p_sounds), 0, 1), axis=2)
+        significant_uniqsound = np.max(significant_uniqsound, axis=1)
+        significant_sound = np.sum(significant_uniqsound > 0)
+        p_mag_idx = [i for i,s in enumerate(significant_mag) if s > 0]
+        p_sound_idx = [i for i,s in enumerate(significant_uniqsound) if s > 0]
+        
+        
+        filenames.append(filename)
+        exp_types.append(exp_type)
+        cell_numbers.append(cell_nums)
+        cell_mags.append(np.sum(significant_mag))
+        cell_sounds.append(significant_sound)
+        #uniq_sounds.append(np.mean(significant_uniqsound))
+        
+        session = {'filename':filename, 'exp_type': exp_type, 'signal':signal, 'frame_mag':mag_frames, 
+                   'frame_sound':sound_frames,'window_mag':windows_mag, 'window_sound':windows_uniqsound, 
+                   'idx_uniqsound':uniq_sound, 'idx_p_mag':p_mag_idx, 'idx_p_sound':p_sound_idx}
+        
+        np.save(f'{filename}_{exp_type}.npy', session)
+        
+# =============================================================================
+#         #plot heat map
+#         indices = np.flip(np.argsort(np.mean(windows_mag[:, 20:40], axis=1)))
+#         windows_mag_sort = windows_avgmag[indices,:]
+#         indices = np.flip(np.argsort(np.mean(windows_sound[:, 15:25], axis=1)))
+#         windows_sound_sort = windows_avgsound[indices,:]
+#         
+#         plt.imshow(windows_sound_sort, aspect='auto')
+#         plt.title(f'{filename} {exp_type} sound')
+#         plt.savefig(f'{filename}_{exp_type}_sound_heatmap.png', dpi=500, bbox_inches='tight')
+#         plt.imshow(windows_mag_sort, aspect='auto')
+#         plt.title(f'{filename} {exp_type} mag')
+#         plt.savefig(f'{filename}_{exp_type}_mag_heatmap.png', dpi=500, bbox_inches='tight')
+# =============================================================================
+        
+             
+    data = {'filename':filenames,'exp_type':exp_types, 'cell_numbers':cell_numbers,
+            'cell_mag':cell_mags, 'cell_sound':cell_sounds}
+    
+    sig_df = pd.DataFrame(data)
+    sig_df.to_csv(f'significant_{exp_type}_frameroll.csv', index=False)
+        
         baselines = []
         for mag_frame in mag_frames:
             baseline = np.mean(signal[:, mag_frame-10:mag_frame], axis=1)
@@ -91,7 +254,7 @@ if __name__ == "__main__":
         mag_threshold = []
         for cell in avg_mageff:
             std = np.std(cell)
-            if any(cell[10:32] > 8*np.std(cell[:10])):
+            if any(cell[:] > 0*np.std(cell[:10])):
                 mag_threshold.append(cell)
         
         mag_threshold = np.array(mag_threshold)
@@ -118,6 +281,8 @@ if __name__ == "__main__":
         for sound_on in sync_sound:
             #sound_frames.append(np.argmin(np.abs(np.array(sync_2p) - sound_on)))
             sound_frames.append(np.argmax((np.array(sync_2p) - sound_on) > 0)-1)
+            #shuffle
+            #sound_frames.append(np.argmax((np.array(sync_2p) - sound_on) > 0)-1+random.randrange(1,20,1))
             
         baseline_sounds = []
         for sound_frame in sound_frames:
@@ -148,7 +313,7 @@ if __name__ == "__main__":
         
         sound_threshold = []
         for sound in pull_soundeff:
-            if any(sound[10:15] > 8*np.std(sound[:10])):
+            if any(sound[:] > 0*np.std(sound[:10])):
                 sound_threshold.append(sound)
         
         sound_threshold = np.array(sound_threshold)
