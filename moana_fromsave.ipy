@@ -10,8 +10,9 @@ type_list = ['all', 'noNP', 'cre', '0mT']
 exp_type = type_list[3]
 index = note.index[(note['experiment']==exp_type) & (note['group']==1)]
 
-#idx = index[2]
-#if idx == index[2]:
+filenames, max_mag, max_sound, cell_numbers=[],[],[],[]
+#idx = index[4]
+#if idx == index[4]:
 for idx in index:
     fdir = note.iloc[idx].labview + '\\' + note.iloc[idx].filename
     filename = note.iloc[idx]['2p'].split('\\')[-1]
@@ -19,61 +20,141 @@ for idx in index:
     session = np.load(f'{filename}_{exp_type}.npy', allow_pickle=True)
     
     """
-    session = {'filename':filename, 'exp_type': exp_type, 'signal':signal, 'frame_mag':mag_frames, 
+    session = {'filename':filename, 'exp_type': exp_type, 'signal':signal, 'sam_para':sam_para, 'frame_mag':mag_frames, 
                'frame_sound':sound_frames,'window_mag':windows_mag, 'window_sound':windows_uniqsound, 
-               'idx_uniqsound':uniq_sound, 'idx_p_mag':p_mag_idx, 'idx_p_sound':p_sound_idx}
+               'idx_uniqsound':uniq_sound, 'idx_p_mag':p_mag_idx, 'idx_p_sound':p_sound_idx, 'idx_bf':idx_best80db}
     """
     
     windows_mag = session.item()['window_mag']
     idx_p_mag = session.item()['idx_p_mag']
     windows_sound = session.item()['window_sound']
     idx_p_sound = session.item()['idx_p_sound']
-    
+    sam_para = session.item()['sam_para']
+    idx_bf = session.item()['idx_bf']
     
 # =============================================================================
+#     """plot significant mag signals base on neuron responded to sound or not"""
+#     mag_insound = [i for i in idx_p_mag if i in idx_p_sound]
+#     mag_exsound = [i for i in idx_p_mag if i not in idx_p_sound]
+#     
+#     windows_in = windows_mag[mag_insound, :, :]
+#     windows_ex = windows_mag[mag_exsound, :, :]
+#     plt.plot(np.mean(windows_in, axis=1).T)
+#     plt.title(f'{filename}_{exp_type}_inSound')
+#     #plt.show()
+#     plt.savefig(f'{filename}_{exp_type}_inSound.png', dpi=500, bbox_inches='tight')
+#     plt.clf()
+#     plt.plot(np.mean(windows_ex, axis=1).T)
+#     plt.title(f'{filename}_{exp_type}_exSound')
+#     #plt.show()
+#     plt.savefig(f'{filename}_{exp_type}_exSound.png', dpi=500, bbox_inches='tight')
+#     plt.clf()
+# =============================================================================
+       
+    filename = ('-').join(filename.split('_'))
+    
+    """PSTH analysis"""
+    cell_mean_mag = np.mean(windows_mag, axis=1)
+    psth_mag = np.mean([np.max(trail[11:45]) for trail in cell_mean_mag])
+    cell_mean_sound = np.mean(windows_sound, axis=1)
+    psth_sound = np.mean([np.max(trail[11:25]) for trail in cell_mean_sound])
+    filenames.append(filename)
+    max_sound.append(psth_sound)
+    max_mag.append(psth_mag)
+    cell_numbers.append(len(windows_mag))
+    
+data = {'filename':filenames,'exp_type':exp_type, 'cell_numbers':cell_numbers,
+        'max_sound':max_sound, 'max_mag':max_mag}
+
+sig_df = pd.DataFrame(data)
+sig_df.to_csv(f'psth_max_{exp_type}.csv', index=False)
+    
+# =============================================================================
+#     """plot PSTH of sginificant signals"""
 #     if idx_p_mag:
 #         sig_window_mag = np.mean(windows_mag[idx_p_mag, :, :], axis=1)
 #         x = np.arange(len(sig_window_mag[0]))
-#         y = np.mean(sig_window_mag, axis=0)
-#         err = stats.sem(sig_window_mag, axis=0)
+#         y = np.mean(sig_window_mag, axis=0)*100
+#         err = stats.sem(sig_window_mag, axis=0)*100
 #         
 #         fig, ax = plt.subplots()
 #         ax.plot(x,y)
 #         ax.fill_between(x, y+err, y-err, color='orange', alpha=0.6)
 #         ax.axvspan(10, 32, alpha=0.1, color='red')
 #         #[ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [10,32]]
-#         ax.set_xticks(np.linspace(0,100,6))
-#         ax.set_xticklabels(np.arange(-10,100,20))
-#         ax.set_title(f'{filename}_{exp_type}_mag', fontsize=14)
-#         ax.set_xlabel('frame', fontsize=16)
-#         ax.set_ylabel('response', fontsize=16)
+#         ax.set_xticks(np.linspace(0,100,11))
+#         ax.set_xticklabels(np.arange(-10,100,10))
+#         ax.set_title(f'{filename}   {exp_type}   Mag', fontsize=14)
+#         ax.set_xlabel('frame number', fontsize=16)
+#         ax.set_ylabel('response (% max range)', fontsize=16)
 #         ax.tick_params(axis='both', which='major', labelsize=14)
-#         plt.savefig(f'{filename}_{exp_type}_mag.png', dpi=500, bbox_inches='tight')
+#         ax = plt.gca()
+#         ax.set_xlim([0, 100])
+#         ax.set_ylim([-2, 7])
+#         #plt.savefig(f'{filename}_{exp_type}_mag.png', dpi=500, bbox_inches='tight')
 #         plt.show()
 #         plt.clf()
 #     else:
 #         pass
+#     
+#     if idx_p_sound:
+#         sig_window_uniqsound = np.mean(windows_sound[idx_p_sound,idx_bf,:,:], axis=1)
+#         #sig_window_sound = np.mean(sig_window_uniqsound, axis=1)
+#         x = np.arange(len(sig_window_uniqsound[0]))
+#         y = np.mean(sig_window_uniqsound, axis=0)*100
+#         err = stats.sem(sig_window_uniqsound, axis=0)*100
+#         
+#         fig, ax = plt.subplots()
+#         ax.plot(x,y)
+#         ax.fill_between(x, y+err, y-err, color='orange', alpha=0.6)
+#         ax.axvspan(10, 16, alpha=0.1, color='red')
+#         #[ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [10,32]]
+#         ax.set_xticks(np.linspace(0,50,6))
+#         ax.set_xticklabels(np.arange(-10,50,10))
+#         ax.set_title(f'{filename}   {exp_type}   Sound', fontsize=14)
+#         ax.set_xlabel('frame number', fontsize=16)
+#         ax.set_ylabel('response (% max range)', fontsize=16)
+#         ax.tick_params(axis='both', which='major', labelsize=14)
+#         ax.set_xlim([0, 50])
+#         ax.set_ylim([-2, 7])
+#         #plt.savefig(f'{filename}_{exp_type}_sound.png', dpi=500, bbox_inches='tight')
+#         plt.show()
+#         plt.clf()
+#     
+#         
+#     """plot single trail window"""
+#     x = np.arange(len(sig_window_mag[1]))
+#     y = sig_window_mag[1]*100
+#     
+#     fig, ax = plt.subplots()
+#     ax.plot(x,y)
+#     ax.axvspan(10, 32, alpha=0.1, color='red')
+#     [ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [21,31]]
+#     ax.set_xticks(np.linspace(0,100,11))
+#     ax.set_xticklabels(np.arange(-10,100,10))
+#     ax.set_title(f'mag window', fontsize=14)
+#     ax.set_xlabel('frame number', fontsize=16)
+#     ax.set_ylabel('response (% max range)', fontsize=16)
+#     ax.tick_params(axis='both', which='major', labelsize=14)
+#     plt.savefig(f'mag_exp.png', dpi=500, bbox_inches='tight')
+#     plt.show()
+#     plt.clf()
+#     
+#     
+#     x = np.arange(len(sig_window_uniqsound[118]))
+#     y = sig_window_uniqsound[118]*100
+#     
+#     fig, ax = plt.subplots()
+#     ax.plot(x,y)
+#     ax.axvspan(10, 16, alpha=0.1, color='red')
+#     [ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [13,23]]
+#     ax.set_xticks(np.linspace(0,50,6))
+#     ax.set_xticklabels(np.arange(-10,50,10))
+#     ax.set_title(f'sound window', fontsize=14)
+#     ax.set_xlabel('frame number', fontsize=16)
+#     ax.set_ylabel('response (% max range)', fontsize=16)
+#     ax.tick_params(axis='both', which='major', labelsize=14)
+#     plt.savefig(f'sound_exp.png', dpi=500, bbox_inches='tight')
+#     plt.show()
+#     plt.clf()
 # =============================================================================
-    
-    if idx_p_sound:
-        sig_window_uniqsound = np.mean(windows_sound[idx_p_sound,:,:,:], axis=2)
-        sig_window_sound = np.mean(sig_window_uniqsound, axis=1)
-        x = np.arange(len(sig_window_sound[0]))
-        y = np.mean(sig_window_sound, axis=0)
-        err = stats.sem(sig_window_sound, axis=0)
-        
-        fig, ax = plt.subplots()
-        ax.plot(x,y)
-        ax.fill_between(x, y+err, y-err, color='orange', alpha=0.6)
-        ax.axvspan(10, 16, alpha=0.1, color='red')
-        #[ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [10,32]]
-        ax.set_xticks(np.linspace(0,50,6))
-        ax.set_xticklabels(np.arange(-10,50,10))
-        ax.set_title(f'{filename}_sound', fontsize=14)
-        ax.set_xlabel('frame', fontsize=16)
-        ax.set_ylabel('response', fontsize=16)
-        ax.tick_params(axis='both', which='major', labelsize=14)
-        plt.savefig(f'{filename}_sound.png', dpi=500, bbox_inches='tight')
-        plt.show()
-        plt.clf()
-    

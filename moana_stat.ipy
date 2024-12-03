@@ -1,0 +1,99 @@
+import numpy as np
+from scipy import stats
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+import pandas as pd
+import random
+import os
+
+data = pd.read_excel(r'statistics.xlsx', sheet_name='statistics')
+
+# =============================================================================
+# mag_all = np.array((data.loc[(data['exp_type']=='all')]['mag_ratio']))
+# sound_all = np.array((data.loc[(data['exp_type']=='all')]['sound_ratio']))
+# mag_control = np.array((data.loc[(data['exp_type']!='all')]['mag_ratio']))
+# sound_control = np.array((data.loc[(data['exp_type']!='all')]['sound_ratio']))
+# 
+# dataset = {'mag_all':mag_all, 'sound_all':sound_all, 'mag_control':mag_control, 'sound_control':sound_control}
+# =============================================================================
+
+g = sns.catplot(
+    x="stimulus", 
+    y="percentage", 
+    hue="exp_type", 
+    data=data, 
+    kind="bar", 
+    errorbar = "se", 
+    edgecolor="black",
+    err_kws={'color': 'black', 'linewidth':1},
+    capsize = 0.3,
+    height=5, 
+    aspect=.75,
+    alpha=0.7)
+g.ax.tick_params(labelsize=14)
+g.ax.set_xlabel('stimulus', fontsize=18)
+g.ax.set_ylabel('responsive cells (%)', fontsize=18)
+#g.savefig('bar.png', dpi=300)
+plt.close()
+
+
+ambient = pd.read_excel(r'statistics.xlsx', sheet_name='ambient')
+ambient_melt = pd.melt(ambient, id_vars=['filename', 'group2'], value_vars=['mag mean', 'pseudomag mean'])
+
+# Plot barplot with error bars
+plt.figure(figsize=(8, 10))
+g2 = sns.barplot(
+    data=ambient_melt, 
+    x='group2', 
+    y='value', 
+    hue='variable', 
+    errorbar = "se",
+    edgecolor="black",
+    palette='pastel', 
+    capsize=0.1,  # Add caps to error bars
+)
+
+
+# Add labels and title
+g2.set_xlabel('Magnetic Output', fontsize=16)
+g2.set_ylabel('Max Energy', fontsize=16)
+plt.tick_params(labelsize=16)
+plt.title('Max Acoustic Energy During Mag Onset', fontsize=18)
+plt.legend(fontsize=16)
+plt.ylim(0,0.1)
+#plt.savefig('max_energy.png', dpi=300)
+plt.show()
+plt.close()
+
+
+psth_max = pd.read_excel(r'statistics.xlsx', sheet_name='max_psth')
+psth_max['max mag'] = psth_max['max mag']*100
+psth_max['max sound'] = psth_max['max sound']*100
+psth_melt = pd.melt(psth_max, id_vars=['filename', 'group'], value_vars=['max mag', 'max sound'])
+
+# Plot barplot with error bars
+plt.figure(figsize=(8, 10))
+g2 = sns.barplot(
+    data=psth_melt, 
+    x='variable', 
+    y='value', 
+    hue='group', 
+    errorbar = "se",
+    edgecolor="black",
+    palette='pastel', 
+    capsize=0.1,  # Add caps to error bars
+)
+
+
+# Add labels and title
+g2.set_xlabel('Stimulus Type', fontsize=16)
+g2.set_ylabel('max 2P signal (% max range)', fontsize=16)
+plt.tick_params(labelsize=16)
+plt.title('Max Intensity in Response Window', fontsize=18)
+plt.legend(fontsize=16)
+plt.ylim(0,10)
+plt.savefig('max_intensity.png', dpi=300)
+plt.show()
+plt.close()
+

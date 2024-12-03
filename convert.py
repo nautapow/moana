@@ -21,13 +21,13 @@ def split_raw(raw_frames, total_frames, tiff):
                 raw_frames = raw_frames[20000:]
 
 
-folder = r'X:\Users\MOANA\2p'
-renames = glob.glob(os.path.join(folder, "*/*/ChanB_Preview.tif"))
+folder = r'Z:\Users\cwchiang\patch2p'
+renames = glob.glob(os.path.join(folder, "*/ChanB_Preview.tif"))
 for old_name in renames:
     new_name = old_name+'back'
     os.rename(old_name, new_name)
     
-raw_dirs = glob.glob(os.path.join(folder, "*/*/Image_001_001.raw"))
+raw_dirs = glob.glob(os.path.join(folder, "*/Image_001_001.raw"))
 
 for raw_dir in raw_dirs:
     tiff = ('\\').join(raw_dir.split('\\')[:-1])+('\\image_00.tif')

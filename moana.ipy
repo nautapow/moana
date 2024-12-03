@@ -1,11 +1,14 @@
 from nptdms import TdmsFile
 import numpy as np
-from scipy import stats
+from scipy import stats, signal
 import matplotlib.pyplot as plt
 import pandas as pd
 import random
 import time
 import os
+#from numba import jit
+import sys
+sys.path.insert(1, r'C:\Users\McGinley3\Documents\GitHub\lsfm')
 
 def isynci(arr):
     """
@@ -26,6 +29,7 @@ def isynci(arr):
     _post= np.array(arr[1:])
     
     return _post - _pre
+    
 
 
 if __name__ == "__main__":
@@ -38,16 +42,22 @@ if __name__ == "__main__":
     if os.path.isfile(r'X:\Users\MOANA\significant.csv'):
         savedata = pd.read_csv(r'X:\Users\MOANA\significant.csv')
     
-    filenames, exp_types, cell_numbers, cell_mags, cell_sounds, uniq_sounds= [],[],[],[],[],[]
+    savefig = True
     
-    #idx = index[5]
-    #if idx == index[5]:
+    
+    filenames, exp_types, cell_numbers, cell_mags, cell_sounds, uniq_sounds= [],[],[],[],[],[]
+    max_mags, max_sounds, max_pseudomags = [],[],[]
+    
+    #idx = index[0]
+    #if idx == index[0]:
     for idx in index:
         fdir = note.iloc[idx].labview + '\\' + note.iloc[idx].filename
+        sound_dir = fdir[:-5]+'_Sound'+fdir[-5:]
         filename = note.iloc[idx]['2p'].split('\\')[-1]
         tdms_file = TdmsFile.open(fdir)
-        groups = tdms_file['Untitled']
         
+        
+        groups = tdms_file['Untitled']
         stimstart = groups['StimStart'][:]
         frame2p = groups['2Pframe1'][:]
         frameMAG = groups['MagTrigger'][:]
@@ -69,26 +79,144 @@ if __name__ == "__main__":
         time_stim = np.diff(np.sign(stimstart-1.5))>0
         sync_sound = [i for i,a in enumerate(time_stim) if a]
         
+        #sound_dir = r'X:\Users\MOANA\labview\20240422\MO006_noNP_001_2024_04_22_08_00_38_Sound.tdms'
+        tdms_sound = TdmsFile.open(sound_dir)
+        group_sound = tdms_sound['Untitled']
+        mic = group_sound['Ambient'][:]
+        sound = group_sound['SoundO']
+        
+        #Analyze ambient sound when mag start
+        rate=25000
+        sync_mag_200k = [int(i*200000/rate) for i in sync_mag]
+        mic_section = []
+        sound_section = []
+        #section for aproximately -5+20 sec around mag sync
+        #not accurate due to resolution
+        for s1 in sync_mag_200k:
+            mic_section.append(mic[s1-5*200000:s1+20*200000])
+            sound_section.append(sound[s1-5*200000:s1+20*200000])
+        
+        #more accurate approximate of mag start using the first sound start
+        time_till_sound = np.array([np.min(np.abs(i-np.array(sync_sound))) for i in sync_mag])
+        
+# =============================================================================
+#         #section for 10 mins
+#         for s1, s2 in zip(sync_mag_200k[:-2], sync_mag_200k[1:]):
+#             mic_section.append(mic[s1-2*200000:s2-2*200000])
+#             sound_section.append(sound[s1-2*200000:s2-2*200000])
+# =============================================================================
+        
+        import pywt
+        """
+        morlet scale for frequencies 3-96k with 0.5 octave interval
+        
+        scales array_like
+        The wavelet scales to use. 
+        One can use f = scale2frequency(wavelet, scale)/sampling_period 
+        to determine what physical frequency, f. 
+        Here, f is in hertz when the sampling_period is given in seconds.
+        """
+        
+        target_f = [3*(2**(i/24))*1000 for i in range(0,121,1)]
+        scales = [54.1666664]
+        scale = scales[0]
+        
+        for t1, t2 in zip(target_f[:-1], target_f[1:]):
+            scale = scale/(t2/t1)
+            scales.append(scale)
+        
+        #f = pywt.scale2frequency('morl', 54.1666664)/(1/200000)
+        
+        mag_pull=[]
+        sound_pull=[]
+        for i,section in enumerate(mic_section):
+            wt, f = pywt.cwt(section, scales, 'morl', sampling_period=1/200000)
+                
+            max_intensity = list(np.max(wt, axis=0))
+            mean_intensity = np.mean(wt, axis=0)
+            reduce = signal.resample(mean_intensity, int((len(mean_intensity)*rate)/200000))
+            
+            sound_hil = np.abs(signal.hilbert(sound_section[i]))
+            reduce_sound = signal.resample(sound_hil, int((len(sound_hil)*rate)/200000))
+            
+            
+            
+            sound_ini = np.diff(np.sign(sound_hil-0.015))>0
+            sound_1st = [i for i,a in enumerate(sound_ini) if a][0]
+            #in case first sound is too mild to be detected
+            if sound_1st>400000:
+                sound_1st = 350000
+            
+            mag_start = sound_1st - time_till_sound[i]
+            xticks = [mag_start+(i*4*rate) for i in range(-1,6,1)]
+            
+            #plot ambient sound align at mag(first sound)
+            plt.plot(reduce)
+            plt.axvspan(mag_start, mag_start+2*rate, alpha=0.1, color='red')
+            plt.xticks(xticks,[-4,0,4,8,12,16,20])
+            plt.xlabel('time (sec)', fontsize=16)
+            if savefig:
+                plt.savefig(f'{filename}_mag{i}.png', dpi=500, bbox_inches='tight')
+            plt.show()
+            plt.clf()
+            
+            plt.plot(reduce)
+            plt.plot(reduce_sound, alpha=0.6)
+            plt.axvspan(mag_start, mag_start+2*rate, alpha=0.1, color='red')
+            plt.xticks(xticks,[-4,0,4,8,12,16,20])
+            plt.xlabel('time (sec)', fontsize=16)
+            if savefig:
+                plt.savefig(f'{filename}_mag{i}_hil.png', dpi=500, bbox_inches='tight')
+            plt.show()
+            plt.clf()
+            
+            mag_pull.append(reduce)
+            sound_pull.append(reduce_sound)
+        
+        mag_pull = np.mean(np.array(mag_pull), axis=0)
+        sound_pull = np.mean(np.array(sound_pull), axis=0)
+        plt.plot(mag_pull)
+        plt.plot(sound_pull)
+        plt.axvspan(mag_start, mag_start+2*rate, alpha=0.1, color='red')
+        plt.xticks(xticks,[-4,0,4,8,12,16,20])
+        plt.xlabel('time (sec)', fontsize=16)
+        if savefig:
+            plt.savefig(f'{filename}_mean.png', dpi=500, bbox_inches='tight')
+        plt.show()
+        plt.clf()
+            
+# =============================================================================
+#         target = [3000*2**i for i in np.arange(0,5.5,0.5)]
+#         
+#         for scale in np.arange(15,60,0.0001):
+#             f = pywt.scale2frequency('morl', scale)/5e-06
+#             for t in target:
+#                 if np.abs(f-t)<0.1:
+#                     print(scale, f, t)
+# =============================================================================
+        
+        
         del frame2p
         del frameMAG
         del stimstart, time_stim
         
         folder = note.iloc[idx]['2p']
-        signal = np.load(f'{folder}\suite2p\plane0\F.npy', allow_pickle=True)
+        singals = np.load(f'{folder}\suite2p\plane0\F.npy', allow_pickle=True)
         residual = np.load(f'{folder}\suite2p\plane0\Fneu.npy', allow_pickle=True)
         #signal = np.load(r'X:\Users\MOANA\2p\20240424\20240424_MO013_002\suite2p\plane0\F.npy', allow_pickle=True)
         #residual = np.load(r'X:\Users\MOANA\2p\20240424\20240424_MO013_002\suite2p\plane0\Fneu.npy', allow_pickle=True)
-        signal = signal-residual
+        singals = singals-residual
         
-        cell_nums = len(signal)
+        cell_nums = len(singals)
         
         del residual
         
         fs = note.iloc[idx].fps
         
-        sync_mag_isi2 = isynci(sync_mag)
-        sync_2p_isi = isynci(sync_2p)
+        #sync_mag_isi2 = isynci(sync_mag)
+        #sync_2p_isi = isynci(sync_2p)
         
+        """Get 2p frame number at each mag/sound start"""
         mag_frames = []
         for mag_on in sync_mag:
             #mag_frames.append(np.argmin(np.abs(np.array(sync_2p) - mag_on)))
@@ -104,12 +232,31 @@ if __name__ == "__main__":
             #shuffle
             #sound_frames.append(np.argmax((np.array(sync_2p) - sound_on) > 0)-1+random.randrange(1,20,1))
         
+        #pseudo stim start frame between sounds
+        avoided_mag_frame=[]
+        for m1, m2 in zip(mag_frames[:-2], mag_frames[1:]):
+            avoided_mag_frame+=list(range(m1+113,m2-45,1))
         
+        avoid_sound_frame=[list(range(i-40,i+15,1)) for i in sound_frames]
+        avoid_sound_frame=[i for j in avoid_sound_frame for i in j ]
+        available_frame = [i for i in avoided_mag_frame if i not in avoid_sound_frame]
+
+        import random
+        pseudo_frames = random.sample(available_frame,10)
+        
+        
+        """
+        main loop
+        section windows using mag/sound frames
+        baseline correction
+        get mag/sound effect from each cell
+        """
         cell_mag_effect=[]
         cell_sound_effect=[]
-        cell_mag_base, cell_sound_base=[],[]
-        windows_mag, windows_sound = [],[]
-        for fcell in signal:
+        cell_pseudomag_effect=[]
+        cell_mag_base, cell_sound_base, cell_pseudomag_base=[],[],[]
+        windows_mag, windows_sound, windows_pseudomag = [],[],[]
+        for fcell in singals:
             fnorm = (fcell - np.min(fcell, axis=0)) / (np.max(fcell, axis=0) - np.min(fcell, axis=0))
             
             frame_mag_base = []
@@ -148,21 +295,48 @@ if __name__ == "__main__":
                 big_window = big_window - base
                 window_sound.append(big_window)
             
+            
+            frame_pseudomag_base = []
+            frame_pseudomag_eff = []
+            window_pseudomag = []
+            for pseudo_frame in pseudo_frames:
+                window = fnorm[pseudo_frame-10:pseudo_frame+30]
+                base = np.mean(window[8:11])
+                window = window - base
+                
+                sig_frame = np.argmax(window[10:])+10
+                max_base_loc = np.argmax(window[3:11])+3
+                max_base = np.mean(window[max_base_loc-1:max_base_loc+2])
+                sig = np.mean(np.array([f for f in window[sig_frame-1:sig_frame+2]]))
+                frame_pseudomag_base.append(max_base)
+                frame_pseudomag_eff.append(sig)
+                big_window = fnorm[pseudo_frame-10:pseudo_frame+45]
+                big_window = big_window - base
+                window_pseudomag.append(big_window)
+            
+            
+            
             cell_mag_base.append(frame_mag_base)
             cell_sound_base.append(frame_sound_base)
+            cell_pseudomag_base.append(frame_pseudomag_base)
             cell_mag_effect.append(frame_mag_eff)
             cell_sound_effect.append(frame_sound_eff)
+            cell_pseudomag_effect.append(frame_pseudomag_eff)
             windows_mag.append(window_mag)
             windows_sound.append(window_sound)
+            windows_pseudomag.append(window_pseudomag)
             
+
 
         cell_mag_effect = np.array(cell_mag_effect)
         cell_sound_effect = np.array(cell_sound_effect)
         cell_mag_effect = cell_mag_effect - np.array(cell_mag_base)
         windows_mag = np.array(windows_mag)
         windows_sound = np.array(windows_sound)
+        windows_pseudomag = np.array(windows_pseudomag)
         windows_avgmag = np.mean(windows_mag, axis=1)
         windows_avgsound = np.mean(windows_sound, axis=1)
+        windows_avgpseudomag = np.mean(windows_pseudomag, axis=1)
         
         
         repeats = len(cell_sound_effect[0])//21
@@ -186,11 +360,12 @@ if __name__ == "__main__":
 #         
 #         windows_uniqsound = windows_sound[:, uniq_sound, :]
 # =============================================================================
-        
+        import random
+        r = random.randrange(0,59,1)
         """significance base on each frame"""
         p_mags, p_sounds = [],[]
         for i in range(10):
-            p_mag = np.array([stats.wilcoxon(frame_mag[:,13+i], alternative='greater')[1] for frame_mag in windows_mag])
+            p_mag = np.array([stats.wilcoxon(frame_mag[:,21+i], alternative='greater')[1] for frame_mag in windows_mag])
             p_mags.append(p_mag < 1-(0.95)**(1/10))
             p_sound = np.array([stats.wilcoxon(frame_sound[:,:,13+i], alternative='greater', axis=1)[1] for frame_sound in windows_uniqsound])
             p_sounds.append(p_sound < 1-(0.95)**(1/210))
@@ -203,136 +378,204 @@ if __name__ == "__main__":
         p_sound_idx = [i for i,s in enumerate(significant_uniqsound) if s > 0]
         
         
+        psth_sound = np.mean(windows_avgsound, axis=0)
+        psth_mag = np.mean(windows_avgmag, axis=0)
+        psth_pseudomag = np.mean(windows_avgpseudomag, axis=0)
+        max_sound = np.max(psth_sound) - psth_sound[10]
+        max_mag = np.max(psth_mag) - psth_mag[10]
+        max_pseudomag = np.max(psth_pseudomag) - psth_pseudomag[10]
+        
+        
+        """append number from each session for statistics"""
         filenames.append(filename)
         exp_types.append(exp_type)
         cell_numbers.append(cell_nums)
         cell_mags.append(np.sum(significant_mag))
         cell_sounds.append(significant_sound)
-        #uniq_sounds.append(np.mean(significant_uniqsound))
+        max_mags.append(max_mag)
+        max_sounds.append(max_sound)
+        max_pseudomags.append(max_pseudomag)
         
-        session = {'filename':filename, 'exp_type': exp_type, 'signal':signal, 'frame_mag':mag_frames, 
-                   'frame_sound':sound_frames,'window_mag':windows_mag, 'window_sound':windows_uniqsound, 
-                   'idx_uniqsound':uniq_sound, 'idx_p_mag':p_mag_idx, 'idx_p_sound':p_sound_idx}
+        #uniq_sounds.append(np.mean(significant_uniqsound))
+        idx_80db = [i for i,a in enumerate(sam_para) if a[1] == 80.0]
+        freq_80db = [a[0] for i,a in enumerate(sam_para) if a[1] == 80.0]
+        scale_80db = windows_uniqsound[:,idx_80db,:,13:23]
+        scale_80db = scale_80db[p_sound_idx,:,:,:]
+        
+        """select best frequency (frequency with most significant cells at 80dB)"""
+        def most_common(lst):
+            return max(set(lst), key=lst.count)
+        
+        best_freq_idx = most_common(list(np.argmax(np.mean(scale_80db, axis=(2,3)), axis=1)))
+        best_freq = freq_80db[best_freq_idx]
+        idx_best80db = [i for i,a in enumerate(sam_para) if a[0] == best_freq and a[1] == 80.0]
+        windows_avgsound = np.squeeze(np.mean(windows_uniqsound[:,idx_best80db,:,:],axis=2))
+        
+                
+        """plot heat map"""
+        #sorted by mean signal intensity in the given windows
+        indices = np.flip(np.argsort(np.mean(windows_avgmag[:, 20:40], axis=1)))
+        windows_mag_sort = windows_avgmag[indices,:]
+        indices = np.flip(np.argsort(np.mean(windows_avgsound[:, 12:25], axis=1)))
+        windows_sound_sort = windows_avgsound[indices,:]
+        indices = np.flip(np.argsort(np.mean(windows_avgpseudomag[:, 12:25], axis=1)))
+        windows_pseudomag_sort = windows_avgpseudomag[indices,:]
+        
+        if len(windows_sound_sort>=100):
+            #plt.imshow(windows_sound_sort[:100], aspect='auto', vmin=-0.02, vmax=0.15)
+            plt.imshow(windows_sound_sort[:100], aspect='auto')
+        else:
+            plt.imshow(windows_sound_sort, aspect='auto')
+        plt.xlabel('frames', fontsize=14)
+        plt.ylabel('cell#', fontsize=14)
+        plt.colorbar()
+        plt.title(f'{filename} {exp_type} sound')
+        if savefig:
+            plt.savefig(f'{filename}_{exp_type}_sound_heatmap.png', dpi=500, bbox_inches='tight')
+        plt.show()
+        plt.clf()
+        
+        if len(windows_mag_sort>=100):
+            plt.imshow(windows_mag_sort[:100], aspect='auto')
+        else:
+            plt.imshow(windows_mag_sort, aspect='auto')
+        plt.xlabel('frames', fontsize=14)
+        plt.ylabel('cell#', fontsize=14)
+        plt.colorbar()
+        plt.title(f'{filename} {exp_type} mag')
+        if savefig:
+            plt.savefig(f'{filename}_{exp_type}_mag_heatmap.png', dpi=500, bbox_inches='tight')
+        plt.show()
+        plt.clf()
+        
+        if len(windows_pseudomag_sort>=100):
+            plt.imshow(windows_pseudomag_sort[:100], aspect='auto')
+        else:
+            plt.imshow(windows_pseudomag_sort, aspect='auto')
+        plt.xlabel('frames', fontsize=14)
+        plt.ylabel('cell#', fontsize=14)
+        plt.colorbar()
+        plt.title(f'{filename} {exp_type} pseudomag')
+        if savefig:
+            plt.savefig(f'{filename}_{exp_type}_pseudomag_heatmap.png', dpi=500, bbox_inches='tight')
+        plt.show()
+        plt.clf()
+        
+
+        
+        
+        session = {'filename':filename, 'exp_type': exp_type, 'signal':singals, 'sam_para':sam_para, 
+                   'frame_mag':mag_frames, 'frame_sound':sound_frames,'frame_pseudomag':pseudo_frames, 
+                   'window_mag':windows_mag, 'window_sound':windows_uniqsound, 'window_pseudomag':windows_pseudomag, 
+                   'idx_uniqsound':uniq_sound, 'idx_p_mag':p_mag_idx, 'idx_p_sound':p_sound_idx, 'idx_bf':idx_best80db}
         
         np.save(f'{filename}_{exp_type}.npy', session)
-        
-# =============================================================================
-#         #plot heat map
-#         indices = np.flip(np.argsort(np.mean(windows_mag[:, 20:40], axis=1)))
-#         windows_mag_sort = windows_avgmag[indices,:]
-#         indices = np.flip(np.argsort(np.mean(windows_sound[:, 15:25], axis=1)))
-#         windows_sound_sort = windows_avgsound[indices,:]
-#         
-#         plt.imshow(windows_sound_sort, aspect='auto')
-#         plt.title(f'{filename} {exp_type} sound')
-#         plt.savefig(f'{filename}_{exp_type}_sound_heatmap.png', dpi=500, bbox_inches='tight')
-#         plt.imshow(windows_mag_sort, aspect='auto')
-#         plt.title(f'{filename} {exp_type} mag')
-#         plt.savefig(f'{filename}_{exp_type}_mag_heatmap.png', dpi=500, bbox_inches='tight')
-# =============================================================================
-        
              
     data = {'filename':filenames,'exp_type':exp_types, 'cell_numbers':cell_numbers,
-            'cell_mag':cell_mags, 'cell_sound':cell_sounds}
+            'cell_mag':cell_mags, 'cell_sound':cell_sounds, 'max_mag':max_mags, 
+            'max_sound':max_sounds, 'max_pseudomag':max_pseudomags}
     
     sig_df = pd.DataFrame(data)
-    sig_df.to_csv(f'significant_{exp_type}_frameroll.csv', index=False)
-        
-        baselines = []
-        for mag_frame in mag_frames:
-            baseline = np.mean(signal[:, mag_frame-10:mag_frame], axis=1)
-            baselines.append(baseline)
-        baselines = np.array(baselines)
-        rounds = len(baselines)
-        cells = len(signal)
-        
-        mag_effects = np.empty((cells, rounds, 100))
-        for i, mag_frame in enumerate(mag_frames):
-            mag_effects[:, i, :] = signal[:, mag_frame-10:mag_frame+90] - np.expand_dims(baselines[i], axis=1)
-        
-        avg_mageff = np.mean(mag_effects, axis=1)
-        mag_threshold = []
-        for cell in avg_mageff:
-            std = np.std(cell)
-            if any(cell[:] > 0*np.std(cell[:10])):
-                mag_threshold.append(cell)
-        
-        mag_threshold = np.array(mag_threshold)
-        x = np.arange(len(mag_threshold[0]))
-        y = np.mean(mag_threshold, axis=0)
-        err = stats.sem(mag_threshold, axis=0)
-        
-        fig, ax = plt.subplots()
-        ax.plot(x,y)
-        ax.fill_between(x, y+err, y-err, color='orange', alpha=0.6)
-        ax.axvspan(10, 32, alpha=0.1, color='red')
-        #[ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [10,32]]
-        ax.set_xticks(np.linspace(0,100,6))
-        ax.set_xticklabels(np.arange(-10,100,20))
-        ax.set_title(f'{filename}_mag', fontsize=14)
-        ax.set_xlabel('frame', fontsize=16)
-        ax.set_ylabel('response', fontsize=16)
-        ax.tick_params(axis='both', which='major', labelsize=14)
-        plt.savefig(f'{filename}_mag.png', dpi=500, bbox_inches='tight')
-        plt.show()
-        plt.clf()
-        
-        sound_frames = []
-        for sound_on in sync_sound:
-            #sound_frames.append(np.argmin(np.abs(np.array(sync_2p) - sound_on)))
-            sound_frames.append(np.argmax((np.array(sync_2p) - sound_on) > 0)-1)
-            #shuffle
-            #sound_frames.append(np.argmax((np.array(sync_2p) - sound_on) > 0)-1+random.randrange(1,20,1))
-            
-        baseline_sounds = []
-        for sound_frame in sound_frames:
-            baseline_sound = np.mean(signal[:, sound_frame-10:sound_frame], axis=1)
-            baseline_sounds.append(baseline_sound)
-        baseline_sounds = np.array(baseline_sounds)
-        rounds = len(baseline_sounds)
-        cells = len(signal)
-        
-        sound_effects = np.empty((cells, rounds, 50))
-        for i, sound_frame in enumerate(sound_frames):
-            try:
-                sound_effects[:, i, :] = signal[:, sound_frame-10:sound_frame+40] - np.expand_dims(baseline_sounds[i], axis=1)
-            except:
-                print(f'for {filename}, cannot broadcast start at {i}')
-                break
-            
-        sound_effects = np.swapaxes(sound_effects, 1, 0)
-        repeats = len(sound_effects)//21
-        duplicate = [[i for i,a in enumerate(sam_para[:int(21*repeats)]) if a == j] for j in sam_para[:21]]
-        
-        
-        avg_soundeff = []
-        for d in duplicate:
-            avg_soundeff.append(np.mean(sound_effects[d], axis=0))
-        avg_soundeff = np.swapaxes(avg_soundeff, 0, 1)
-        pull_soundeff = np.reshape(avg_soundeff, (-1,50))
-        
-        sound_threshold = []
-        for sound in pull_soundeff:
-            if any(sound[:] > 0*np.std(sound[:10])):
-                sound_threshold.append(sound)
-        
-        sound_threshold = np.array(sound_threshold)
-        x = np.arange(len(sound_threshold[0]))
-        y = np.mean(sound_threshold, axis=0)
-        err = stats.sem(sound_threshold, axis=0)
-        
-        fig, ax = plt.subplots()
-        ax.plot(x,y)
-        ax.fill_between(x, y+err, y-err, color='orange', alpha=0.6)
-        ax.axvspan(10, 16, alpha=0.1, color='red')
-        #[ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [10,32]]
-        ax.set_xticks(np.linspace(0,50,6))
-        ax.set_xticklabels(np.arange(-10,50,10))
-        ax.set_title(f'{filename}_sound', fontsize=14)
-        ax.set_xlabel('frame', fontsize=16)
-        ax.set_ylabel('response', fontsize=16)
-        ax.tick_params(axis='both', which='major', labelsize=14)
-        plt.savefig(f'{filename}_sound.png', dpi=500, bbox_inches='tight')
-        plt.show()
-        plt.clf()
+    sig_df.to_csv(f'significant_{exp_type}_max.csv', index=False)
+    
+    
+# =============================================================================
+#         baselines = []
+#         for mag_frame in mag_frames:
+#             baseline = np.mean(singals[:, mag_frame-10:mag_frame], axis=1)
+#             baselines.append(baseline)
+#         baselines = np.array(baselines)
+#         rounds = len(baselines)
+#         cells = len(singals)
+#         
+#         mag_effects = np.empty((cells, rounds, 100))
+#         for i, mag_frame in enumerate(mag_frames):
+#             mag_effects[:, i, :] = singals[:, mag_frame-10:mag_frame+90] - np.expand_dims(baselines[i], axis=1)
+#         
+#         avg_mageff = np.mean(mag_effects, axis=1)
+#         mag_threshold = []
+#         for cell in avg_mageff:
+#             std = np.std(cell)
+#             if any(cell[:] > 0*np.std(cell[:10])):
+#                 mag_threshold.append(cell)
+#         
+#         mag_threshold = np.array(mag_threshold)
+#         x = np.arange(len(mag_threshold[0]))
+#         y = np.mean(mag_threshold, axis=0)
+#         err = stats.sem(mag_threshold, axis=0)
+#         
+#         fig, ax = plt.subplots()
+#         ax.plot(x,y)
+#         ax.fill_between(x, y+err, y-err, color='orange', alpha=0.6)
+#         ax.axvspan(10, 32, alpha=0.1, color='red')
+#         #[ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [10,32]]
+#         ax.set_xticks(np.linspace(0,100,6))
+#         ax.set_xticklabels(np.arange(-10,100,20))
+#         ax.set_title(f'{filename}_mag', fontsize=14)
+#         ax.set_xlabel('frame', fontsize=16)
+#         ax.set_ylabel('response', fontsize=16)
+#         ax.tick_params(axis='both', which='major', labelsize=14)
+#         plt.savefig(f'{filename}_mag.png', dpi=500, bbox_inches='tight')
+#         plt.show()
+#         plt.clf()
+#         
+#         sound_frames = []
+#         for sound_on in sync_sound:
+#             #sound_frames.append(np.argmin(np.abs(np.array(sync_2p) - sound_on)))
+#             sound_frames.append(np.argmax((np.array(sync_2p) - sound_on) > 0)-1)
+#             #shuffle
+#             #sound_frames.append(np.argmax((np.array(sync_2p) - sound_on) > 0)-1+random.randrange(1,20,1))
+#             
+#         baseline_sounds = []
+#         for sound_frame in sound_frames:
+#             baseline_sound = np.mean(singals[:, sound_frame-10:sound_frame], axis=1)
+#             baseline_sounds.append(baseline_sound)
+#         baseline_sounds = np.array(baseline_sounds)
+#         rounds = len(baseline_sounds)
+#         cells = len(singals)
+#         
+#         sound_effects = np.empty((cells, rounds, 50))
+#         for i, sound_frame in enumerate(sound_frames):
+#             try:
+#                 sound_effects[:, i, :] = singals[:, sound_frame-10:sound_frame+40] - np.expand_dims(baseline_sounds[i], axis=1)
+#             except:
+#                 print(f'for {filename}, cannot broadcast start at {i}')
+#                 break
+#             
+#         sound_effects = np.swapaxes(sound_effects, 1, 0)
+#         repeats = len(sound_effects)//21
+#         duplicate = [[i for i,a in enumerate(sam_para[:int(21*repeats)]) if a == j] for j in sam_para[:21]]
+#         
+#         
+#         avg_soundeff = []
+#         for d in duplicate:
+#             avg_soundeff.append(np.mean(sound_effects[d], axis=0))
+#         avg_soundeff = np.swapaxes(avg_soundeff, 0, 1)
+#         pull_soundeff = np.reshape(avg_soundeff, (-1,50))
+#         
+#         sound_threshold = []
+#         for sound in pull_soundeff:
+#             if any(sound[:] > 0*np.std(sound[:10])):
+#                 sound_threshold.append(sound)
+#         
+#         sound_threshold = np.array(sound_threshold)
+#         x = np.arange(len(sound_threshold[0]))
+#         y = np.mean(sound_threshold, axis=0)
+#         err = stats.sem(sound_threshold, axis=0)
+#         
+#         fig, ax = plt.subplots()
+#         ax.plot(x,y)
+#         ax.fill_between(x, y+err, y-err, color='orange', alpha=0.6)
+#         ax.axvspan(10, 16, alpha=0.1, color='red')
+#         #[ax.axvline(x=_x, color='k', linestyle='--', alpha=0.5) for _x in [10,32]]
+#         ax.set_xticks(np.linspace(0,50,6))
+#         ax.set_xticklabels(np.arange(-10,50,10))
+#         ax.set_title(f'{filename}_sound', fontsize=14)
+#         ax.set_xlabel('frame', fontsize=16)
+#         ax.set_ylabel('response', fontsize=16)
+#         ax.tick_params(axis='both', which='major', labelsize=14)
+#         plt.savefig(f'{filename}_sound.png', dpi=500, bbox_inches='tight')
+#         plt.show()
+#         plt.clf()
+# =============================================================================
         

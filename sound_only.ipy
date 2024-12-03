@@ -1,0 +1,231 @@
+from nptdms import TdmsFile
+import numpy as np
+from scipy import stats, signal
+import matplotlib.pyplot as plt
+import pandas as pd
+import random
+import time
+import os
+#from numba import jit
+import sys
+sys.path.insert(1, r'C:\Users\McGinley3\Documents\GitHub\lsfm')
+
+def isynci(arr):
+    """
+    return intervals of TTL sync pulses
+
+    Parameters
+    ----------
+    arr : list or 1d-array
+        sync pulses.
+
+    Returns
+    -------
+    1d-array
+        inter sync interval.
+
+    """
+    _pre = np.array(arr[:-1])
+    _post= np.array(arr[1:])
+    
+    return _post - _pre
+    
+
+
+if __name__ == "__main__":
+    note = pd.read_csv(r'X:\Users\MOANA\exp_note.csv')
+    type_list = ['all', 'noNP', 'cre', '0mT']
+    exp_type = type_list[1]
+    
+    index = note.index[(note['experiment']==exp_type) & (note['group']==1)]
+    
+    if os.path.isfile(r'X:\Users\MOANA\significant.csv'):
+        savedata = pd.read_csv(r'X:\Users\MOANA\significant.csv')
+    
+    savefig = False
+    
+    
+    filenames, means, errs, p_values=[],[],[],[]
+    
+    #idx = index[1]
+    #if idx == index[1]:
+    for idx in index:
+        fdir = note.iloc[idx].labview + '\\' + note.iloc[idx].filename
+        sound_dir = fdir[:-5]+'_Sound'+fdir[-5:]
+        filename = note.iloc[idx]['2p'].split('\\')[-1]
+        tdms_file = TdmsFile.open(fdir)
+        
+        
+        groups = tdms_file['Untitled']
+        stimstart = groups['StimStart'][:]
+        frame2p = groups['2Pframe1'][:]
+        frameMAG = groups['MagTrigger'][:]
+        sam_para = groups['Tone Parameters'][:]
+        
+        sam_freq = sam_para[::2]
+        sam_loud = sam_para[1::2]
+        sam_para = tuple(zip(sam_freq, sam_loud))
+        
+        rate=25000
+        time_stim = np.diff(np.sign(frame2p-2.5))>0
+        sync_2p = [i for i,a in enumerate(time_stim) if a]
+        
+        time_stim = np.diff(np.sign(frameMAG-2.5))>0
+        sync_mag = [i for i,a in enumerate(time_stim) if a]
+        #remove dummy sync
+        sync_mag.pop(0)
+        
+        time_stim = np.diff(np.sign(stimstart-1.5))>0
+        sync_sound = [i for i,a in enumerate(time_stim) if a]
+        
+        
+        sync_mag_re = [int(i/2500) for i in sync_mag]
+        sync_sound_re = [int(i/2500) for i in sync_sound]
+        
+        avoided_mag_sync = []
+        for m1, m2 in zip(sync_mag_re[:-2], sync_mag_re[1:]):
+            avoided_mag_sync+=list(range(m1+40,m2-40,1))
+        
+        sound_to_avoid = [list(range(i-40,i+15,1)) for i in sync_sound_re]
+        sound_to_avoid = [i for j in sound_to_avoid for i in j ]
+        available_sync = [i for i in avoided_mag_sync if i not in sound_to_avoid]
+
+        import random
+        sync_pseudomag = random.sample(available_sync,10)
+        sync_pseudomag = [int(i*2500) for i in sync_pseudomag]
+        
+        
+        #sound_dir = r'X:\Users\MOANA\labview\20240422\MO006_noNP_001_2024_04_22_08_00_38_Sound.tdms'
+        tdms_sound = TdmsFile.open(sound_dir)
+        group_sound = tdms_sound['Untitled']
+        mic = group_sound['Ambient'][:]
+        sound = group_sound['SoundO']
+        
+        #Analyze ambient sound when mag start
+        sync_mag_200k = [int(i*200000/rate) for i in sync_mag]
+        mic_section = []
+        sound_section = []
+        #section for aproximately -5+20 sec around mag sync
+        #not accurate due to resolution
+        for s1 in sync_mag_200k:
+            mic_section.append(mic[s1-5*200000:s1+20*200000])
+            sound_section.append(sound[s1-5*200000:s1+20*200000])
+        
+        #more accurate approximate of mag start using the first sound start
+        time_till_sound = np.array([np.min(np.abs(i-np.array(sync_sound))) for i in sync_mag])
+        
+        import pywt
+        """
+        morlet scale for frequencies 3-96k with 0.5 octave interval
+        
+        scales array_like
+        The wavelet scales to use. 
+        One can use f = scale2frequency(wavelet, scale)/sampling_period 
+        to determine what physical frequency, f. 
+        Here, f is in hertz when the sampling_period is given in seconds.
+        """
+        # for 10 freq/octave (i/10), use 51 in range
+        # for 24 freq/octave, use 121
+        target_f = [3*(2**(i/10))*1000 for i in range(0,51,1)]
+        scales = [54.1666664]
+        scale = scales[0]
+        
+        for t1, t2 in zip(target_f[:-1], target_f[1:]):
+            scale = scale/(t2/t1)
+            scales.append(scale)
+        
+        #f = pywt.scale2frequency('morl', 54.1666664)/(1/200000)
+        
+# =============================================================================
+#         """visualize ambient sound sectioned by mag start"""
+#         mag_pull=[]
+#         sound_pull=[]
+#         for i,section in enumerate(mic_section):
+#             wt, f = pywt.cwt(section, scales, 'morl', sampling_period=1/200000)
+#                 
+#             max_intensity = list(np.max(wt, axis=0))
+#             mean_intensity = np.mean(wt, axis=0)
+#             reduce = signal.resample(max_intensity, int((len(max_intensity)*rate)/200000))
+#             
+#             sound_hil = np.abs(signal.hilbert(sound_section[i]))
+#             reduce_sound = signal.resample(sound_hil, int((len(sound_hil)*rate)/200000))
+#             
+#             
+#             
+#             sound_ini = np.diff(np.sign(sound_hil-0.015))>0
+#             sound_1st = [i for i,a in enumerate(sound_ini) if a][0]
+#             #in case first sound is too mild to be detected
+#             if sound_1st>400000:
+#                 sound_1st = 350000
+#             
+#             mag_start = sound_1st - time_till_sound[i]
+#             xticks = [mag_start+(i*4*rate) for i in range(-1,6,1)]
+#             
+#             #plot ambient sound align at mag(first sound)
+#             plt.plot(reduce)
+#             plt.axvspan(mag_start, mag_start+2*rate, alpha=0.1, color='red')
+#             plt.xticks(xticks,[-4,0,4,8,12,16,20])
+#             plt.xlabel('time (sec)', fontsize=16)
+#             if savefig:
+#                 plt.savefig(f'{filename}_mag{i}.png', dpi=500, bbox_inches='tight')
+#             plt.show()
+#             plt.clf()
+#             
+#             plt.plot(reduce)
+#             plt.plot(reduce_sound, alpha=0.6)
+#             plt.axvspan(mag_start, mag_start+2*rate, alpha=0.1, color='red')
+#             plt.xticks(xticks,[-4,0,4,8,12,16,20])
+#             plt.xlabel('time (sec)', fontsize=16)
+#             if savefig:
+#                 plt.savefig(f'{filename}_mag{i}_hil.png', dpi=500, bbox_inches='tight')
+#             plt.show()
+#             plt.clf()
+#             
+#             mag_pull.append(reduce)
+#             sound_pull.append(reduce_sound)
+#         
+#         mag_pull = np.mean(np.array(mag_pull), axis=0)
+#         sound_pull = np.mean(np.array(sound_pull), axis=0)
+#         plt.plot(mag_pull)
+#         plt.plot(sound_pull)
+#         plt.axvspan(mag_start, mag_start+2*rate, alpha=0.1, color='red')
+#         plt.xticks(xticks,[-4,0,4,8,12,16,20])
+#         plt.xlabel('time (sec)', fontsize=16)
+#         if savefig:
+#             plt.savefig(f'{filename}_mean.png', dpi=500, bbox_inches='tight')
+#         plt.show()
+#         plt.clf()
+# =============================================================================
+        
+        
+        
+        """Analyze max noise level in mag and pseudomag duration"""
+        max_mag=[]
+        for m in sync_mag:
+            m = m*8 #upscale to high-resolution
+            mic_mag = mic[m:m+4*200000] #4 seconds window
+            wt, f = pywt.cwt(mic_mag, scales, 'morl', sampling_period=1/200000)
+            max_mag.append(np.max(wt))
+
+        max_pseudomag=[]
+        for m in sync_pseudomag:
+            m = m*8 #upscale to high-resolution
+            mic_pseudomag = mic[m:m+4*200000] #4 seconds window
+            wt, f = pywt.cwt(mic_pseudomag, scales, 'morl', sampling_period=1/200000)
+            max_pseudomag.append(np.max(wt))
+        
+        t_stat, p_value = stats.ttest_ind(max_mag, max_pseudomag)
+        
+        means.append([np.mean(max_mag), np.mean(max_pseudomag)])
+        errs.append([stats.sem(max_mag), stats.sem(max_pseudomag)])
+        p_values.append(p_value)
+        filenames.append(filename)
+        
+    means = np.swapaxes(np.array(means),0,1)
+    errs = np.swapaxes(np.array(errs),0,1)
+    ambient_stats = {'filename':filenames, 'stim_type':exp_type, 
+                     'mag_mean':means[0], 'pseudomag_mean':means[1], 
+                     'mag_err':errs[0], 'pseudomag_err':errs[1], 'p_value':p_values}
+    data = pd.DataFrame(ambient_stats)
+    data.to_csv(f'ambient_stats-{exp_type}.csv', index=False)
+    
